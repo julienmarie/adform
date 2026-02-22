@@ -29,6 +29,20 @@ Build data image (from account data + base image):
   ghcr.io/your-org/adform-data:deploy-<data-sha>
 ```
 
+## GitHub Actions
+
+This repo publishes the base code image automatically via:
+
+- `.github/workflows/publish-code-image.yml`
+
+Published tags in `ghcr.io/<owner>/adform`:
+
+- `code-main` on pushes to `main`
+- `code-<full-sha>` on every push
+- `code-<git-tag>` on tagged releases (`v*`)
+
+The private data repo (`btd_marketing`) can build from `code-main` by default, or from a pinned `code-<sha>` for deterministic rollouts.
+
 ## Run Locally
 
 ```bash
