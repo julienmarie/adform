@@ -1,0 +1,20 @@
+# Runtime / local state
+.adform/
+reports/
+.cache/
+.superdesign/
+.venv/
+.env
+.DS_Store
+localhost_*.report.html
+
+# Generated landing artifacts
+landing/build/
+*/landing/build/
+accounts/*/landing/build/
+
+# Keep account data out of public code repo
+accounts/
+btd_main/
+meta/
+btd_marketing/

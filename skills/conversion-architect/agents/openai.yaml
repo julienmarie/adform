@@ -1,0 +1,4 @@
+interface:
+  display_name: "Conversion Architect"
+  short_description: "Design premium persuasion systems that convert"
+  default_prompt: "Use $conversion-architect to architect mechanism-led conversion copy for my offer."

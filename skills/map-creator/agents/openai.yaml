@@ -1,0 +1,4 @@
+interface:
+  display_name: "Map Creator"
+  short_description: "Build code-driven custom map visuals"
+  default_prompt: "Use $map-creator to create a custom city map from my visual and data requirements."

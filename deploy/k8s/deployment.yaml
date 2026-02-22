@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adform-landing
+  namespace: adform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adform-landing
+  template:
+    metadata:
+      labels:
+        app: adform-landing
+    spec:
+      containers:
+        - name: adform
+          image: ghcr.io/your-org/adform-data:deploy-<data-sha>
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ADFORM_SERVER_ENV
+              value: "prod"
+            - name: ADFORM_SERVER_BIND
+              value: "0.0.0.0:8080"
+            - name: ADFORM_SERVER_ACCOUNT
+              value: "btd_main"
+            - name: ADFORM_SERVER_ROOT
+              value: "/srv/accounts"
+            - name: ADFORM_STATE_PATH
+              value: "/var/lib/adform/state.db"
+            - name: ADFORM_SERVER_TRUST_PROXY
+              value: "true"
+          envFrom:
+            - secretRef:
+                name: adform-platform-secrets
+                optional: true
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          volumeMounts:
+            - name: adform-state
+              mountPath: /var/lib/adform
+      volumes:
+        - name: adform-state
+          emptyDir: {}

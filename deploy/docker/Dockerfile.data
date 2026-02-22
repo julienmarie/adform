@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1.7
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+WORKDIR /srv
+COPY accounts/ /srv/accounts/
+
+ENV ADFORM_SERVER_ROOT=/srv/accounts \
+    ADFORM_SERVER_ENV=prod \
+    ADFORM_SERVER_BIND=0.0.0.0:8080
+
+EXPOSE 8080
+ENTRYPOINT ["adform", "serve"]

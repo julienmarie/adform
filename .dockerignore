@@ -1,0 +1,18 @@
+.git
+.adform
+.cache
+.superdesign
+.venv
+reports
+dist
+localhost_*.report.html
+**/*.db
+**/.DS_Store
+
+# Generated landing artifacts
+landing/build
+*/landing/build
+accounts/*/landing/build
+
+# Local env
+.env
