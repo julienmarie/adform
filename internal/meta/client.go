@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	defaultAPIVersion  = "v22.0"
-	maxPaginationPages = 100
+	defaultAPIVersion    = "v26.0"
+	productionBaseURL    = "https://graph.facebook.com/" + defaultAPIVersion
+	maxPaginationPages   = 100
+	maxResponseBodyBytes = 8 << 20
 )
 
 type APIError struct {
@@ -66,10 +68,11 @@ func IsRateLimited(err error) bool {
 }
 
 type Client struct {
-	BaseURL    string
-	Token      string
-	HTTPClient *http.Client
-	Logf       func(format string, args ...any)
+	baseURL            string
+	token              string
+	httpClientOverride *http.Client
+	logFunc            func(format string, args ...any)
+	urlPolicy          func(*url.URL) error
 }
 
 func FromEnv() (*Client, error) {
@@ -81,22 +84,11 @@ func FromEnv() (*Client, error) {
 }
 
 func FromToken(token string) *Client {
-	version := strings.TrimSpace(os.Getenv("META_API_VERSION"))
-	if version == "" {
-		version = defaultAPIVersion
-	}
-	if !strings.HasPrefix(version, "v") {
-		version = "v" + version
-	}
-	base := strings.TrimSpace(os.Getenv("META_API_BASE_URL"))
-	if base == "" {
-		base = "https://graph.facebook.com/" + version
-	}
 	return &Client{
-		BaseURL:    strings.TrimRight(base, "/"),
-		Token:      token,
-		HTTPClient: &http.Client{Timeout: 45 * time.Second},
-		Logf: func(format string, args ...any) {
+		baseURL:            productionBaseURL,
+		token:              token,
+		httpClientOverride: &http.Client{Timeout: 45 * time.Second},
+		logFunc: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},
 	}
@@ -134,9 +126,7 @@ func (c *Client) ListEdge(edge string, fields []string, params url.Values) ([]ma
 	if len(fields) > 0 {
 		params.Set("fields", strings.Join(fields, ","))
 	}
-	params.Set("access_token", c.Token)
-
-	nextURL := c.BaseURL + normalizePath(edge) + "?" + params.Encode()
+	nextURL := c.baseURL + normalizePath(edge) + "?" + params.Encode()
 	out := make([]map[string]any, 0)
 	for page := 0; nextURL != ""; page++ {
 		if page >= maxPaginationPages {
@@ -191,9 +181,6 @@ func (c *Client) UploadImage(adAccountID, filePath string) (string, error) {
 	}
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	if err := writer.WriteField("access_token", c.Token); err != nil {
-		return "", err
-	}
 	part, err := writer.CreateFormFile("filename", filepath.Base(filePath))
 	if err != nil {
 		return "", err
@@ -210,7 +197,7 @@ func (c *Client) UploadImage(adAccountID, filePath string) (string, error) {
 		return "", err
 	}
 
-	endpoint := c.BaseURL + "/" + adAccountID + "/adimages"
+	endpoint := c.baseURL + "/" + adAccountID + "/adimages"
 	contentType := writer.FormDataContentType()
 	payload, err := c.doWithRetry(http.MethodPost, func() (*http.Request, error) {
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body.Bytes()))
@@ -245,9 +232,6 @@ func (c *Client) UploadVideo(adAccountID, filePath string) (string, error) {
 	}
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	if err := writer.WriteField("access_token", c.Token); err != nil {
-		return "", err
-	}
 	part, err := writer.CreateFormFile("source", filepath.Base(filePath))
 	if err != nil {
 		return "", err
@@ -264,7 +248,7 @@ func (c *Client) UploadVideo(adAccountID, filePath string) (string, error) {
 		return "", err
 	}
 
-	endpoint := c.BaseURL + "/" + adAccountID + "/advideos"
+	endpoint := c.baseURL + "/" + adAccountID + "/advideos"
 	contentType := writer.FormDataContentType()
 	payload, err := c.doWithRetry(http.MethodPost, func() (*http.Request, error) {
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body.Bytes()))
@@ -293,8 +277,10 @@ func (c *Client) doJSON(method, path string, query url.Values, form url.Values, 
 	if query == nil {
 		query = url.Values{}
 	}
-	query.Set("access_token", c.Token)
-	endpoint := c.BaseURL + normalizePath(path)
+	if hasCredentialField(query) || hasCredentialField(form) {
+		return errors.New("meta request credentials are forbidden outside Authorization header")
+	}
+	endpoint := c.baseURL + normalizePath(path)
 	if encoded := query.Encode(); encoded != "" {
 		endpoint += "?" + encoded
 	}
@@ -332,21 +318,36 @@ func (c *Client) doJSON(method, path string, query url.Values, form url.Values, 
 	return nil
 }
 
-func decodeAPIError(payload []byte) error {
+func hasCredentialField(values url.Values) bool {
+	for key := range values {
+		if strings.EqualFold(key, "access_token") {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) decodeAPIError(payload []byte) error {
 	var wrapped struct {
 		Error APIError `json:"error"`
 	}
 	if err := json.Unmarshal(payload, &wrapped); err == nil && wrapped.Error.Message != "" {
+		wrapped.Error.Message = c.redactToken(wrapped.Error.Message)
 		return &wrapped.Error
 	}
-	return &APIError{Message: string(payload)}
+	return &APIError{Message: "meta api returned an invalid error response"}
 }
 
 func (c *Client) httpClient() *http.Client {
-	if c.HTTPClient != nil {
-		return c.HTTPClient
+	base := c.httpClientOverride
+	if base == nil {
+		base = &http.Client{Timeout: 45 * time.Second}
 	}
-	return &http.Client{Timeout: 45 * time.Second}
+	client := *base
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &client
 }
 
 func normalizePath(path string) string {
@@ -364,6 +365,9 @@ func (c *Client) doWithRetry(method string, buildReq func() (*http.Request, erro
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		req, err := buildReq()
 		if err != nil {
+			return nil, c.sanitizeError(err)
+		}
+		if err := c.prepareRequest(req); err != nil {
 			return nil, err
 		}
 		resp, err := c.httpClient().Do(req)
@@ -374,27 +378,33 @@ func (c *Client) doWithRetry(method string, buildReq func() (*http.Request, erro
 				time.Sleep(delay)
 				continue
 			}
-			return nil, err
+			return nil, c.sanitizeError(err)
 		}
-		payload, readErr := io.ReadAll(resp.Body)
+		payload, readErr := readBounded(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
+			if errors.Is(readErr, errResponseBodyTooLarge) {
+				return nil, readErr
+			}
 			if attempt < maxAttempts-1 {
 				delay := retryDelay(attempt, resp.StatusCode, resp.Header.Get("Retry-After"), suggestedDelayFromHeaders(resp.Header))
 				c.logRetryRead(method, requestTarget(req), resp.StatusCode, readErr, resp.Header, delay, attempt+1, maxAttempts)
 				time.Sleep(delay)
 				continue
 			}
-			return nil, readErr
+			return nil, c.sanitizeError(readErr)
 		}
-		if resp.StatusCode < 400 {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			if d := proactiveDelayFromHeaders(resp.Header); d > 0 {
 				c.logProactiveThrottle(method, requestTarget(req), resp.Header, d)
 				time.Sleep(d)
 			}
 			return payload, nil
 		}
-		apiErr := decodeAPIError(payload)
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			return nil, fmt.Errorf("meta redirect response rejected (status %d)", resp.StatusCode)
+		}
+		apiErr := c.decodeAPIError(payload)
 		if shouldRetryResponse(method, resp.StatusCode, apiErr) && attempt < maxAttempts-1 {
 			delay := retryDelay(attempt, resp.StatusCode, resp.Header.Get("Retry-After"), suggestedDelayFromHeaders(resp.Header))
 			c.logRetryResponse(method, requestTarget(req), resp.StatusCode, apiErr, resp.Header, delay, attempt+1, maxAttempts)
@@ -407,10 +417,10 @@ func (c *Client) doWithRetry(method string, buildReq func() (*http.Request, erro
 }
 
 func (c *Client) logf(format string, args ...any) {
-	if c == nil || c.Logf == nil {
+	if c == nil || c.logFunc == nil {
 		return
 	}
-	c.Logf(format, args...)
+	c.logFunc(format, args...)
 }
 
 func (c *Client) logRetryTransport(method, target string, err error, delay time.Duration, attempt, maxAttempts int) {
@@ -454,14 +464,70 @@ func (c *Client) logRetryResponse(method, target string, status int, err error, 
 }
 
 func (c *Client) redactToken(message string) string {
-	if c == nil || c.Token == "" {
+	if c == nil || c.token == "" {
 		return message
 	}
-	message = strings.ReplaceAll(message, c.Token, "[REDACTED]")
-	if encoded := url.QueryEscape(c.Token); encoded != c.Token {
+	message = strings.ReplaceAll(message, c.token, "[REDACTED]")
+	if encoded := url.QueryEscape(c.token); encoded != c.token {
 		message = strings.ReplaceAll(message, encoded, "[REDACTED]")
 	}
 	return message
+}
+
+var errResponseBodyTooLarge = errors.New("meta response body exceeds 8 MiB limit")
+
+func readBounded(body io.Reader) ([]byte, error) {
+	payload, err := io.ReadAll(io.LimitReader(body, maxResponseBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > maxResponseBodyBytes {
+		return nil, errResponseBodyTooLarge
+	}
+	return payload, nil
+}
+
+func (c *Client) prepareRequest(req *http.Request) error {
+	if req == nil || req.URL == nil {
+		return errors.New("meta request URL is required")
+	}
+	policy := validateProductionURL
+	if c.urlPolicy != nil {
+		policy = c.urlPolicy
+	}
+	if err := policy(req.URL); err != nil {
+		return err
+	}
+	if req.URL.User != nil {
+		return errors.New("meta request URL credentials are forbidden")
+	}
+	for key := range req.URL.Query() {
+		if strings.EqualFold(key, "access_token") {
+			return errors.New("meta request URL credentials are forbidden")
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	return nil
+}
+
+func validateProductionURL(target *url.URL) error {
+	if target.Scheme != "https" {
+		return errors.New("meta request rejected: HTTPS is required")
+	}
+	if target.Host != "graph.facebook.com" {
+		return errors.New("meta request rejected: unexpected host")
+	}
+	if target.Path != "/"+defaultAPIVersion && !strings.HasPrefix(target.Path, "/"+defaultAPIVersion+"/") {
+		return errors.New("meta request rejected: unexpected API version")
+	}
+	return nil
+}
+
+func (c *Client) sanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(c.redactToken(err.Error()))
 }
 
 func (c *Client) logProactiveThrottle(method, target string, headers http.Header, delay time.Duration) {

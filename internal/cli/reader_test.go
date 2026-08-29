@@ -25,6 +25,8 @@ func TestRunReaderRejectsStatsMutationFlags(t *testing.T) {
 	for _, flag := range []string{
 		"--export=stats.json", "--save-snapshot", "--state=state.db",
 		"-export=stats.json", "-save-snapshot", "-state=state.db",
+		"--level=ad", "--verbose", "--breakdown=age", "--compare=yesterday",
+		"--limit=10", "--unknown", "positional",
 	} {
 		t.Run(flag, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -37,4 +39,57 @@ func TestRunReaderRejectsStatsMutationFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateReaderArgsAcceptsExactKarajanContract(t *testing.T) {
+	args := []string{
+		"stats", "--root", "/workspace", "--account", "example",
+		"--level", "campaign", "--last", "last_7d", "--event", "purchase", "--json",
+	}
+	if err := validateReaderArgs(args); err != nil {
+		t.Fatalf("validateReaderArgs() error = %v", err)
+	}
+}
+
+func TestValidateReaderArgsRejectsInvalidValuesBeforeLookup(t *testing.T) {
+	tests := [][]string{
+		{"stats", "--account", "x", "--level", "ad"},
+		{"stats", "--account", "x", "--last", "7d"},
+		{"stats", "--account", "x", "--last", "yesterday"},
+		{"stats", "--account", "x", "--event", "lead"},
+		{"stats", "--account", "x", "--json=false"},
+		{"stats", "--account", "x", "extra"},
+	}
+	for _, args := range tests {
+		if err := validateReaderArgs(args); err == nil {
+			t.Errorf("validateReaderArgs(%q) succeeded", args)
+		}
+	}
+}
+
+func TestValidateReaderArgsRequiresCompleteKarajanContract(t *testing.T) {
+	base := []string{
+		"stats", "--root", "/workspace", "--account", "example",
+		"--level", "campaign", "--last", "last_7d", "--event", "purchase", "--json",
+	}
+	for _, omitted := range []string{"--root", "--account", "--level", "--last", "--event", "--json"} {
+		args := omitReaderFlag(base, omitted)
+		if err := validateReaderArgs(args); err == nil {
+			t.Errorf("validateReaderArgs() accepted contract without %s", omitted)
+		}
+	}
+}
+
+func omitReaderFlag(args []string, omitted string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != omitted {
+			out = append(out, args[i])
+			continue
+		}
+		if omitted != "--json" {
+			i++
+		}
+	}
+	return out
 }
