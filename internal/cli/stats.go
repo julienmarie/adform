@@ -53,7 +53,7 @@ func runStats(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	bindCommonFlags(fs, &opts.commonOptions)
 	fs.StringVar(&opts.Level, "level", "campaign", "Insights level: campaign|adset|ad")
-	fs.StringVar(&opts.Last, "last", "7d", "Time window (e.g. 7d, 30d, last_7d, this_month)")
+	fs.StringVar(&opts.Last, "last", "last_7d", "Time window (e.g. 7d, 30d, last_7d, this_month)")
 	fs.StringVar(&opts.Compare, "compare", "", "Optional comparison window label (informational)")
 	fs.StringVar(&opts.Breakdown, "breakdown", "", "Comma-separated breakdowns (e.g. age,gender,platform_position)")
 	fs.StringVar(&opts.Event, "event", "purchase", "Conversion action type (purchase alias supported)")

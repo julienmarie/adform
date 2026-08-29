@@ -16,5 +16,5 @@ accounts/*/landing/build/
 # Keep account data out of public code repo
 accounts/
 btd_main/
-meta/
+/meta/
 btd_marketing/
